@@ -1,4 +1,4 @@
-# etampe
+# 💌 Étampe
 
 `etampe` is a small SMTP-to-Cloudflare Email Sending bridge for homelab Kubernetes clusters. It accepts SMTP on port `2525`, parses the message into Cloudflare's REST payload, sends through the Cloudflare Email Sending API, exposes `/healthz`, `/readyz`, and `/metrics` on port `8080`, and can export OpenTelemetry traces and metrics over OTLP.
 
