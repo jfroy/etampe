@@ -1,0 +1,6 @@
+.git
+.github
+Dockerfile
+README.md
+LICENSE
+**/*_test.go
