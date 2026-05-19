@@ -4,10 +4,15 @@
 
 ## Configuration
 
+Prerequisites:
+
+- A domain onboarded to [Cloudflare Email Service](https://developers.cloudflare.com/email-service/get-started/send-emails/) (SPF, DKIM, and bounce MX records configured).
+- A Cloudflare API token with the **Account / Email Service: Edit** permission scoped to the target account.
+
 Required:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_API_TOKEN`: API token with **Account / Email Service: Edit** permission.
 
 Common options:
 
