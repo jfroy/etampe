@@ -117,3 +117,7 @@ spec:
 ```
 
 Point in-cluster apps at `etampe.default.svc.cluster.local:2525`. Scrape `http://etampe:8080/metrics`.
+
+## See also
+
+- https://github.com/imrasalghul/mailbridge
