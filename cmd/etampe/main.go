@@ -79,6 +79,10 @@ func run() error {
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 	})
+	if err := cloudflareClient.VerifyToken(ctx); err != nil {
+		return fmt.Errorf("cloudflare token verification failed: %w", err)
+	}
+
 	sender := smtpserver.SenderFunc(func(ctx context.Context, msg email.Message) error {
 		_, err := cloudflareClient.Send(ctx, msg)
 		return err

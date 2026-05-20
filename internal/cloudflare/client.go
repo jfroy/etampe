@@ -85,11 +85,18 @@ type SendResult struct {
 	Queued           []string `json:"queued,omitempty"`
 }
 
-type apiEnvelope struct {
+type apiEnvelope[R any] struct {
 	Success  bool         `json:"success"`
 	Errors   []APIMessage `json:"errors"`
 	Messages []APIMessage `json:"messages"`
-	Result   SendResult   `json:"result"`
+	Result   R            `json:"result"`
+}
+
+type tokenVerifyResult struct {
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	ExpiresOn string `json:"expires_on,omitempty"`
+	NotBefore string `json:"not_before,omitempty"`
 }
 
 type APIMessage struct {
@@ -217,7 +224,7 @@ func (c *Client) Send(ctx context.Context, msg email.Message) (SendResult, error
 		return SendResult{}, fmt.Errorf("read cloudflare response: %w", err)
 	}
 
-	var envelope apiEnvelope
+	var envelope apiEnvelope[SendResult]
 	var parseErr error
 	if len(raw) > 0 {
 		parseErr = json.Unmarshal(raw, &envelope)
@@ -241,6 +248,69 @@ func (c *Client) Send(ctx context.Context, msg email.Message) (SendResult, error
 	}
 	span.SetStatus(codes.Ok, "")
 	return envelope.Result, nil
+}
+
+// VerifyToken checks that the configured API token is valid and active.
+func (c *Client) VerifyToken(ctx context.Context) error {
+	ctx, span := c.tracer.Start(ctx, "cloudflare.token.verify")
+	defer span.End()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/user/tokens/verify", nil)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("build token verify request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "etampe/1")
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("send token verify request: %w", err)
+	}
+	defer func() {
+		_ = res.Body.Close()
+	}()
+
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("read token verify response: %w", err)
+	}
+
+	var envelope apiEnvelope[tokenVerifyResult]
+	var parseErr error
+	if len(raw) > 0 {
+		parseErr = json.Unmarshal(raw, &envelope)
+	}
+
+	span.SetAttributes(attribute.Int("http.response.status_code", res.StatusCode))
+	if parseErr != nil || res.StatusCode < 200 || res.StatusCode > 299 || !envelope.Success {
+		apiErr := &APIError{
+			StatusCode: res.StatusCode,
+			Errors:     envelope.Errors,
+			Body:       string(raw),
+			ParseError: parseErr,
+		}
+		span.RecordError(apiErr)
+		span.SetStatus(codes.Error, apiErr.Error())
+		return apiErr
+	}
+
+	if envelope.Result.Status != "active" {
+		err := fmt.Errorf("cloudflare api token is %s", envelope.Result.Status)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+
+	span.SetStatus(codes.Ok, "")
+	c.logger.Info("cloudflare api token verified", "token_id", envelope.Result.ID, "status", envelope.Result.Status)
+	return nil
 }
 
 func (c *Client) sendURL() string {
