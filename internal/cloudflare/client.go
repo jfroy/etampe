@@ -206,6 +206,7 @@ func (c *Client) Send(ctx context.Context, msg email.Message) (SendResult, error
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "etampe/1")
+	c.logRequest(req, body)
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -223,6 +224,7 @@ func (c *Client) Send(ctx context.Context, msg email.Message) (SendResult, error
 		span.SetStatus(codes.Error, err.Error())
 		return SendResult{}, fmt.Errorf("read cloudflare response: %w", err)
 	}
+	c.logResponse(ctx, res, raw)
 
 	var envelope apiEnvelope[SendResult]
 	var parseErr error
@@ -264,6 +266,7 @@ func (c *Client) VerifyToken(ctx context.Context) error {
 	req.Header.Set("Authorization", "Bearer "+c.apiToken)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "etampe/1")
+	c.logRequest(req, nil)
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -281,6 +284,7 @@ func (c *Client) VerifyToken(ctx context.Context) error {
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("read token verify response: %w", err)
 	}
+	c.logResponse(ctx, res, raw)
 
 	var envelope apiEnvelope[tokenVerifyResult]
 	var parseErr error
@@ -316,4 +320,34 @@ func (c *Client) VerifyToken(ctx context.Context) error {
 func (c *Client) sendURL() string {
 	accountID := url.PathEscape(c.accountID)
 	return c.baseURL + "/accounts/" + accountID + "/email/sending/send"
+}
+
+func (c *Client) logRequest(req *http.Request, body []byte) {
+	if !c.logger.Enabled(req.Context(), slog.LevelDebug) {
+		return
+	}
+	headers := make(map[string]string, len(req.Header))
+	for k, vs := range req.Header {
+		if strings.EqualFold(k, "authorization") {
+			headers[k] = "Bearer [REDACTED]"
+		} else {
+			headers[k] = strings.Join(vs, ", ")
+		}
+	}
+	args := []any{"method", req.Method, "url", req.URL.String(), "headers", headers}
+	if len(body) > 0 {
+		args = append(args, "body", string(body))
+	}
+	c.logger.Debug("cloudflare api request", args...)
+}
+
+func (c *Client) logResponse(ctx context.Context, res *http.Response, body []byte) {
+	if !c.logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	headers := make(map[string]string, len(res.Header))
+	for k, vs := range res.Header {
+		headers[k] = strings.Join(vs, ", ")
+	}
+	c.logger.Debug("cloudflare api response", "status", res.StatusCode, "headers", headers, "body", string(body))
 }
