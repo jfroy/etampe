@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 const defaultMaxMessageBytes = 5 * 1024 * 1024
@@ -53,55 +53,69 @@ type CloudflareConfig struct {
 }
 
 func Load() (Config, error) {
+	v := viper.New()
+
+	// Map viper keys to env vars: dots become underscores, all uppercased.
+	// e.g. "smtp.addr" -> "SMTP_ADDR", "cloudflare.api_token" -> "CLOUDFLARE_API_TOKEN"
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
+	v.SetDefault("smtp.addr", ":2525")
+	v.SetDefault("smtp.domain", "etampe.local")
+	v.SetDefault("smtp.allow_insecure_auth", true)
+	v.SetDefault("smtp.max_message_bytes", defaultMaxMessageBytes)
+	v.SetDefault("smtp.max_recipients", 100)
+	v.SetDefault("smtp.read_timeout", "30s")
+	v.SetDefault("smtp.write_timeout", "30s")
+	v.SetDefault("smtp.send_timeout", "30s")
+	v.SetDefault("http.addr", ":8080")
+	v.SetDefault("cloudflare.api_base_url", "https://api.cloudflare.com/client/v4")
+	v.SetDefault("cloudflare.timeout", "15s")
+	v.SetDefault("log_level", "info")
+	v.SetDefault("otel.service_name", "etampe")
+	v.SetDefault("shutdown_timeout", "15s")
+
+	// Optional config file (etampe.yaml / etampe.toml in . or /etc/etampe).
+	v.SetConfigName("etampe")
+	v.AddConfigPath(".")
+	v.AddConfigPath("/etc/etampe")
+	_ = v.ReadInConfig()
+
 	var validationErrs []error
 
-	allowInsecureAuth, err := getBool("SMTP_ALLOW_INSECURE_AUTH", true)
-	validationErrs = appendIfError(validationErrs, err)
-	maxMessageBytes, err := getInt64("SMTP_MAX_MESSAGE_BYTES", defaultMaxMessageBytes)
-	validationErrs = appendIfError(validationErrs, err)
-	maxRecipients, err := getInt("SMTP_MAX_RECIPIENTS", 100)
-	validationErrs = appendIfError(validationErrs, err)
-	smtpReadTimeout, err := getDuration("SMTP_READ_TIMEOUT", 30*time.Second)
-	validationErrs = appendIfError(validationErrs, err)
-	smtpWriteTimeout, err := getDuration("SMTP_WRITE_TIMEOUT", 30*time.Second)
-	validationErrs = appendIfError(validationErrs, err)
-	smtpSendTimeout, err := getDuration("SMTP_SEND_TIMEOUT", 30*time.Second)
-	validationErrs = appendIfError(validationErrs, err)
-	cloudflareTimeout, err := getDuration("CLOUDFLARE_TIMEOUT", 15*time.Second)
-	validationErrs = appendIfError(validationErrs, err)
-	logLevel, err := getLogLevel("LOG_LEVEL", slog.LevelInfo)
-	validationErrs = appendIfError(validationErrs, err)
-	shutdownTimeout, err := getDuration("SHUTDOWN_TIMEOUT", 15*time.Second)
-	validationErrs = appendIfError(validationErrs, err)
+	logLevel, err := parseLogLevel(v.GetString("log_level"))
+	if err != nil {
+		validationErrs = append(validationErrs, err)
+	}
 
 	cfg := Config{
 		SMTP: SMTPConfig{
-			Addr:              getEnv("SMTP_ADDR", ":2525"),
-			Domain:            getEnv("SMTP_DOMAIN", "etampe.local"),
-			Username:          os.Getenv("SMTP_USERNAME"),
-			Password:          os.Getenv("SMTP_PASSWORD"),
-			TLSCertFile:       os.Getenv("SMTP_TLS_CERT_FILE"),
-			TLSKeyFile:        os.Getenv("SMTP_TLS_KEY_FILE"),
-			AllowInsecureAuth: allowInsecureAuth,
-			MaxMessageBytes:   maxMessageBytes,
-			MaxRecipients:     maxRecipients,
-			ReadTimeout:       smtpReadTimeout,
-			WriteTimeout:      smtpWriteTimeout,
-			SendTimeout:       smtpSendTimeout,
+			Addr:              v.GetString("smtp.addr"),
+			Domain:            v.GetString("smtp.domain"),
+			Username:          v.GetString("smtp.username"),
+			Password:          v.GetString("smtp.password"),
+			TLSCertFile:       v.GetString("smtp.tls_cert_file"),
+			TLSKeyFile:        v.GetString("smtp.tls_key_file"),
+			AllowInsecureAuth: v.GetBool("smtp.allow_insecure_auth"),
+			MaxMessageBytes:   v.GetInt64("smtp.max_message_bytes"),
+			MaxRecipients:     v.GetInt("smtp.max_recipients"),
+			ReadTimeout:       v.GetDuration("smtp.read_timeout"),
+			WriteTimeout:      v.GetDuration("smtp.write_timeout"),
+			SendTimeout:       v.GetDuration("smtp.send_timeout"),
 		},
 		HTTP: HTTPConfig{
-			Addr: getEnv("HTTP_ADDR", ":8080"),
+			Addr: v.GetString("http.addr"),
 		},
 		Cloudflare: CloudflareConfig{
-			AccountID: os.Getenv("CLOUDFLARE_ACCOUNT_ID"),
-			APIToken:  os.Getenv("CLOUDFLARE_API_TOKEN"),
-			BaseURL:   getEnv("CLOUDFLARE_API_BASE_URL", "https://api.cloudflare.com/client/v4"),
-			From:      os.Getenv("CLOUDFLARE_FROM"),
-			Timeout:   cloudflareTimeout,
+			AccountID: v.GetString("cloudflare.account_id"),
+			APIToken:  v.GetString("cloudflare.api_token"),
+			BaseURL:   v.GetString("cloudflare.api_base_url"),
+			From:      v.GetString("cloudflare.from"),
+			Timeout:   v.GetDuration("cloudflare.timeout"),
 		},
 		LogLevel:        logLevel,
-		ServiceName:     getEnv("OTEL_SERVICE_NAME", "etampe"),
-		ShutdownTimeout: shutdownTimeout,
+		ServiceName:     v.GetString("otel.service_name"),
+		ShutdownTimeout: v.GetDuration("shutdown_timeout"),
 	}
 
 	if cfg.Cloudflare.AccountID == "" {
@@ -126,70 +140,8 @@ func Load() (Config, error) {
 	return cfg, errors.Join(validationErrs...)
 }
 
-func appendIfError(errs []error, err error) []error {
-	if err == nil {
-		return errs
-	}
-	return append(errs, err)
-}
-
-func getEnv(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func getDuration(key string, fallback time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback, fmt.Errorf("%s must be a Go duration like 30s or 5m: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func getInt(key string, fallback int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback, fmt.Errorf("%s must be an integer: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func getInt64(key string, fallback int64) (int64, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return fallback, fmt.Errorf("%s must be an integer: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func getBool(key string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback, fmt.Errorf("%s must be a boolean: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func getLogLevel(key string, fallback slog.Level) (slog.Level, error) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+func parseLogLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "debug":
 		return slog.LevelDebug, nil
 	case "info", "":
@@ -199,6 +151,6 @@ func getLogLevel(key string, fallback slog.Level) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	default:
-		return fallback, fmt.Errorf("%s must be one of debug, info, warn, error", key)
+		return slog.LevelInfo, fmt.Errorf("log_level must be one of debug, info, warn, error")
 	}
 }
