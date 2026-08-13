@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
-	github.com/emersion/go-smtp v0.24.0
+	github.com/emersion/go-smtp v0.25.0
 	github.com/prometheus/client_golang v1.24.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0
 	go.opentelemetry.io/otel v1.45.0
